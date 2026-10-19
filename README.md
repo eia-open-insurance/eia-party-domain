@@ -1,13 +1,13 @@
 # eia-party-domain
 
-- GitHub organization: `eia-platform`
-- Repository URL: https://github.com/eia-platform/eia-party-domain
+- GitHub organization: `eia-open-insurance`
+- Repository URL: https://github.com/eia-open-insurance/eia-party-domain
 - Type: Spring Boot service
 - Deployable: Yes
 - Owner: Party
 - Runtime: Java 22 and Spring Boot
 - Data store: eia_party (tx schema)
-- Depends on: eia-party-expert, eia-contracts, eia-platform-libs
+- Depends on: eia-party-expert, eia-contracts, eia-open-insurance-libs
 
 ## Purpose
 
@@ -34,3 +34,6 @@ Party business rules, transaction catalog, orchestration, approvals, and APIs. P
 
 Owns the business logic for this vertical.
 
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
