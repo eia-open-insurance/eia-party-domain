@@ -1,0 +1,13 @@
+server:
+  port: 8082
+spring:
+  application:
+    name: eia-party-domain
+eia:
+  party:
+    expert-url: http://localhost:8081
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
