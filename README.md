@@ -7,7 +7,7 @@
 - Owner: Party
 - Runtime: Java 22 and Spring Boot
 - Data store: eia_party (tx schema)
-- Depends on: eia-party-expert, eia-contracts, eia-open-insurance-libs
+- Depends on: eia-party-expert, eia-contracts, eia-platform/libs
 
 ## Purpose
 
