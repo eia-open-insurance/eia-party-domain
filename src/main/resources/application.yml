@@ -3,6 +3,15 @@ server:
 spring:
   application:
     name: eia-party-domain
+  datasource:
+    url: ${EIA_PARTY_DB_URL:jdbc:postgresql://localhost:5432/eia_party}
+    username: ${EIA_PARTY_DB_USERNAME:postgres}
+    password: ${EIA_PARTY_DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: 3
+      minimum-idle: 1
+      connection-timeout: 30000
+      initialization-fail-timeout: -1
 eia:
   party:
     expert-url: http://localhost:8081

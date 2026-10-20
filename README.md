@@ -13,6 +13,16 @@
 
 Party business rules, transaction catalog, orchestration, approvals, and APIs. Party identity, roles, merge, KYC/AML, sanctions, and consent.
 
+## Global search
+
+`GET /api/v1/parties/search?q={term}&limit=10` returns the common shell search
+envelope `{query, limit, items}`. `q` is a case-insensitive contains over
+`partyNumber`, `displayName`, and `legalName`; a blank `q` returns the latest
+records by `updatedAt DESC`. `limit` defaults to 10 and is capped at 25. Every
+query is scoped to `X-EIA-Tenant`. The read uses `JdbcTemplate` against the
+`eia_party` data store; the existing list/get/create routes keep proxying the
+Party expert unchanged.
+
 ## Responsibilities
 
 - Keep this repository focused on one deployable component or one platform concern.
