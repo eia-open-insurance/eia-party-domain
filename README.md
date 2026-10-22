@@ -50,6 +50,30 @@ Content-Type: application/json
 {"identifierType":"TAX_ID","identifierValue":"123-45-6789","issuingAuthority":"IRS"}
 ```
 
+## Status transitions
+
+`PATCH /api/v1/parties/{partyId}/status` applies one party lifecycle transition
+through the Party expert with the `{status, reason}` command. The route requires
+`X-EIA-Tenant` and forwards it on the expert query string and the
+`X-EIA-Tenant` header; the optional `If-Match` and `Idempotency-Key` headers are
+forwarded unchanged. The response is the updated party DTO with an `ETag` built
+from its aggregate `version`. The expert owns the status vocabulary and the
+transition rules, and its `400`/`404` responses keep their status and structured
+`code`/`message`.
+
+```http
+PATCH /api/v1/parties/0192f3a4-8f1c-7c3a-9b2e-6a1d4f8e2b90/status
+X-EIA-Tenant: 11111111-1111-7111-8111-111111111111
+If-Match: "4"
+Idempotency-Key: 0192f3a4-5b1c-7e2d-9a3f-6c8d1e0b4a72
+Content-Type: application/json
+
+{"status":"ACTIVE","reason":"KYC verified"}
+```
+
+A successful transition returns `200 OK`, the updated party body, and
+`ETag: "5"`.
+
 ## Responsibilities
 
 - Keep this repository focused on one deployable component or one platform concern.

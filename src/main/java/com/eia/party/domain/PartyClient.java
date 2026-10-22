@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -69,6 +70,43 @@ public class PartyClient {
                     .body(PartyDto.class);
         } catch (RestClientResponseException ex) {
             throw translate(ex, null);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
+    /**
+     * Applies one party status transition. The expert owns the status vocabulary and the
+     * transition rules; the domain forwards the tenant on both the query parameter and the
+     * {@code X-EIA-Tenant} header, passes the optional {@code If-Match} and
+     * {@code Idempotency-Key} headers through unchanged, and returns the updated party.
+     */
+    public PartyDto updateStatus(UUID tenantId, UUID partyId, UpdatePartyStatusCommand command,
+                                 String ifMatch, String idempotencyKey) {
+        try {
+            RestClient.RequestBodySpec spec = client.patch()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/status")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId))
+                    .header(TENANT_HEADER, tenantId.toString());
+            if (ifMatch != null && !ifMatch.isBlank()) {
+                spec = spec.header(HttpHeaders.IF_MATCH, ifMatch);
+            }
+            if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+                spec = spec.header("Idempotency-Key", idempotencyKey);
+            }
+            PartyDto party = spec
+                    .body(new UpdateStatusRequest(command.status(), command.reason()))
+                    .retrieve()
+                    .body(PartyDto.class);
+            if (party == null) {
+                throw PartyApiException.expertBadResponse();
+            }
+            return party;
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
         } catch (ResourceAccessException ex) {
             throw PartyApiException.expertUnavailable();
         } catch (RestClientException ex) {
@@ -232,4 +270,6 @@ public class PartyClient {
     }
 
     record CreatePartyRequest(UUID tenantId, String partyType, String displayName, String legalName) {}
+
+    record UpdateStatusRequest(String status, String reason) {}
 }

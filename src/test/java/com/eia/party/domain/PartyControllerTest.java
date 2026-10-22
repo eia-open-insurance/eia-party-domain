@@ -1,6 +1,7 @@
 package com.eia.party.domain;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
@@ -11,12 +12,17 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -123,7 +129,131 @@ class PartyControllerTest {
                 .andExpect(jsonPath("$.message").value("Party already exists"));
     }
 
+    @Test
+    void updateStatusReturnsThePartyWithItsVersionEtag() throws Exception {
+        when(client.updateStatus(eq(TENANT), eq(PARTY_ID), any(), isNull(), isNull()))
+                .thenReturn(party("ACTIVE", 4));
+
+        mvc.perform(patch(URL + "/" + PARTY_ID + "/status")
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status": "ACTIVE", "reason": "KYC verified"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(header().string("ETag", "\"4\""))
+                .andExpect(jsonPath("$.id").value(PARTY_ID.toString()))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.version").value(4));
+    }
+
+    @Test
+    void updateStatusForwardsTheCommandAndOptionalHeaders() throws Exception {
+        when(client.updateStatus(eq(TENANT), eq(PARTY_ID), any(), eq("\"3\""), eq("status-key-1")))
+                .thenReturn(party("INACTIVE", 4));
+
+        mvc.perform(patch(URL + "/" + PARTY_ID + "/status")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("If-Match", "\"3\"")
+                        .header("Idempotency-Key", "status-key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status": "INACTIVE", "reason": "Merged into a successor"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(header().string("ETag", "\"4\""))
+                .andExpect(jsonPath("$.status").value("INACTIVE"));
+
+        ArgumentCaptor<UpdatePartyStatusCommand> command =
+                ArgumentCaptor.forClass(UpdatePartyStatusCommand.class);
+        verify(client).updateStatus(eq(TENANT), eq(PARTY_ID), command.capture(),
+                eq("\"3\""), eq("status-key-1"));
+        assertThat(command.getValue())
+                .isEqualTo(new UpdatePartyStatusCommand("INACTIVE", "Merged into a successor"));
+    }
+
+    @Test
+    void updateStatusPreservesExpertBadRequest() throws Exception {
+        when(client.updateStatus(eq(TENANT), eq(PARTY_ID), any(), any(), any()))
+                .thenThrow(PartyApiException.badRequest("VALIDATION_ERROR",
+                        "Unsupported party status: BOGUS"));
+
+        mvc.perform(patch(URL + "/" + PARTY_ID + "/status")
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status": "BOGUS", "reason": "not a real status"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").value("Unsupported party status: BOGUS"));
+    }
+
+    @Test
+    void updateStatusPreservesExpertNotFound() throws Exception {
+        when(client.updateStatus(eq(TENANT), eq(PARTY_ID), any(), any(), any()))
+                .thenThrow(PartyApiException.notFound("Party not found: " + PARTY_ID));
+
+        mvc.perform(patch(URL + "/" + PARTY_ID + "/status")
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status": "ACTIVE"}
+                                """))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.message").value("Party not found: " + PARTY_ID));
+    }
+
+    @Test
+    void updateStatusWithoutTenantIsRejectedBeforeTheExpertCall() throws Exception {
+        mvc.perform(patch(URL + "/" + PARTY_ID + "/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status": "ACTIVE"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("TENANT_REQUIRED"))
+                .andExpect(jsonPath("$.message").value("X-EIA-Tenant header is required"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void updateStatusRequiresAStatus() throws Exception {
+        mvc.perform(patch(URL + "/" + PARTY_ID + "/status")
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"reason": "missing target status"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION"))
+                .andExpect(jsonPath("$.details.status").exists());
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void updateStatusRejectsAReasonLongerThanTheExpertLimit() throws Exception {
+        mvc.perform(patch(URL + "/" + PARTY_ID + "/status")
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status": "ACTIVE", "reason": "%s"}
+                                """.formatted("x".repeat(501))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION"))
+                .andExpect(jsonPath("$.details.reason").exists());
+
+        verifyNoInteractions(client);
+    }
+
     private static PartyDto party() {
+        return party("ACTIVE", 0);
+    }
+
+    private static PartyDto party(String status, int version) {
         Instant now = Instant.parse("2026-10-19T12:00:00Z");
         return new PartyDto(
                 PARTY_ID,
@@ -132,10 +262,10 @@ class PartyControllerTest {
                 "ORGANIZATION",
                 "Acme Chemical Corporation",
                 "Acme Chemical Corporation",
-                "ACTIVE",
+                status,
                 "CLEAR",
                 "INTERNAL",
-                0,
+                version,
                 now,
                 now);
     }

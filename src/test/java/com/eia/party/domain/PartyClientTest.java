@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.headerDoesNotExist;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -310,6 +311,120 @@ class PartyClientTest {
     }
 
     @Test
+    void updateStatusForwardsTenantBodyAndOptionalHeaders() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/status?tenantId=" + TENANT))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(header("If-Match", "\"3\""))
+                .andExpect(header("Idempotency-Key", "status-key-1"))
+                .andExpect(content().json("""
+                        {"status": "ACTIVE", "reason": "KYC verified"}
+                        """))
+                .andRespond(withSuccess(party("ACTIVE", 4), MediaType.APPLICATION_JSON));
+
+        PartyDto party = client.updateStatus(TENANT, PARTY_ID,
+                new UpdatePartyStatusCommand("ACTIVE", "KYC verified"), "\"3\"", "status-key-1");
+
+        assertEquals(PARTY_ID, party.id());
+        assertEquals(TENANT, party.tenantId());
+        assertEquals("ACTIVE", party.status());
+        assertEquals(4, party.version());
+        server.verify();
+    }
+
+    @Test
+    void updateStatusOmitsOptionalHeadersWhenTheCallerDidNotSendThem() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/status?tenantId=" + TENANT))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(headerDoesNotExist("If-Match"))
+                .andExpect(headerDoesNotExist("Idempotency-Key"))
+                .andExpect(content().json("""
+                        {"status": "ACTIVE"}
+                        """))
+                .andRespond(withSuccess(party("ACTIVE", 1), MediaType.APPLICATION_JSON));
+
+        PartyDto party = client.updateStatus(TENANT, PARTY_ID,
+                new UpdatePartyStatusCommand("ACTIVE", null), null, null);
+
+        assertEquals("ACTIVE", party.status());
+        assertEquals(1, party.version());
+        server.verify();
+    }
+
+    @Test
+    void updateStatusDoesNotForwardBlankOptionalHeaders() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/status?tenantId=" + TENANT))
+                .andExpect(headerDoesNotExist("If-Match"))
+                .andExpect(headerDoesNotExist("Idempotency-Key"))
+                .andRespond(withSuccess(party("ACTIVE", 2), MediaType.APPLICATION_JSON));
+
+        client.updateStatus(TENANT, PARTY_ID,
+                new UpdatePartyStatusCommand("ACTIVE", "verified"), " ", "");
+
+        server.verify();
+    }
+
+    @Test
+    void updateStatusPreservesExpertBadRequest() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/status?tenantId=" + TENANT))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {
+                                  "code": "VALIDATION_ERROR",
+                                  "message": "Unsupported party status: BOGUS"
+                                }
+                                """));
+
+        PartyApiException exception = assertThrows(PartyApiException.class,
+                () -> client.updateStatus(TENANT, PARTY_ID,
+                        new UpdatePartyStatusCommand("BOGUS", null), null, null));
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
+        assertEquals("VALIDATION_ERROR", exception.getCode());
+        assertEquals("Unsupported party status: BOGUS", exception.getMessage());
+        server.verify();
+    }
+
+    @Test
+    void updateStatusPreservesExpertNotFound() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/status?tenantId=" + TENANT))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"NOT_FOUND\",\"message\":\"Party not found: " + PARTY_ID + "\"}"));
+
+        PartyApiException exception = assertThrows(PartyApiException.class,
+                () -> client.updateStatus(TENANT, PARTY_ID,
+                        new UpdatePartyStatusCommand("ACTIVE", null), null, null));
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
+        assertEquals("NOT_FOUND", exception.getCode());
+        assertEquals("Party not found: " + PARTY_ID, exception.getMessage());
+        server.verify();
+    }
+
+    @Test
+    void updateStatusWithAnEmptyExpertBodyIsABadGateway() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/status?tenantId=" + TENANT))
+                .andRespond(withSuccess());
+
+        PartyApiException exception = assertThrows(PartyApiException.class,
+                () -> client.updateStatus(TENANT, PARTY_ID,
+                        new UpdatePartyStatusCommand("ACTIVE", null), null, null));
+
+        assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatus());
+        assertEquals("EXPERT_BAD_RESPONSE", exception.getCode());
+        server.verify();
+    }
+
+    @Test
     void createAddressPreservesExpertConflict() {
         server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
                         + "/addresses?tenantId=" + TENANT))
@@ -330,5 +445,24 @@ class PartyClientTest {
         assertEquals("CONFLICT", exception.getCode());
         assertEquals("Address already exists for this party", exception.getMessage());
         server.verify();
+    }
+
+    private static String party(String status, int version) {
+        return """
+                {
+                  "id": "%s",
+                  "tenantId": "%s",
+                  "partyNumber": "PTY-000000001",
+                  "partyType": "ORGANIZATION",
+                  "displayName": "Acme Chemical Corporation",
+                  "legalName": "Acme Chemical Corporation",
+                  "status": "%s",
+                  "sanctionsStatus": "CLEAR",
+                  "confidentiality": "INTERNAL",
+                  "version": %d,
+                  "createdAt": "2026-10-19T12:00:00Z",
+                  "updatedAt": "2026-10-22T09:00:00Z"
+                }
+                """.formatted(PARTY_ID, TENANT, status, version);
     }
 }
