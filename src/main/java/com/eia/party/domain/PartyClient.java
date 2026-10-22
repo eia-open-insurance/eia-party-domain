@@ -1,9 +1,11 @@
 package com.eia.party.domain;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -11,10 +13,13 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Component
 public class PartyClient {
+    private static final String TENANT_HEADER = "X-EIA-Tenant";
+
     private final RestClient client;
     private final ObjectMapper objectMapper;
 
@@ -71,6 +76,115 @@ public class PartyClient {
         }
     }
 
+    /**
+     * Lists one party's identifiers. The expert owns the tenant wall and the ordering; the domain
+     * forwards the tenant on both the query parameter and the {@code X-EIA-Tenant} header (the
+     * expert rejects a mismatch) and returns the expert projection as the public DTO.
+     */
+    public List<PartyIdentifierDto> findIdentifiers(UUID tenantId, UUID partyId) {
+        try {
+            List<PartyIdentifierDto> identifiers = client.get()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/identifiers")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId))
+                    .header(TENANT_HEADER, tenantId.toString())
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            if (identifiers == null) {
+                throw PartyApiException.expertBadResponse();
+            }
+            return identifiers.stream().filter(Objects::nonNull).toList();
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
+    /**
+     * Adds an identifier to a party. The body is forwarded unchanged: the expert owns identifier
+     * validation, normalization, and duplicate detection, and the tenant comes from the header.
+     */
+    public PartyIdentifierDto createIdentifier(UUID tenantId, UUID partyId, JsonNode body) {
+        try {
+            PartyIdentifierDto identifier = client.post()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/identifiers")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId))
+                    .header(TENANT_HEADER, tenantId.toString())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(PartyIdentifierDto.class);
+            if (identifier == null) {
+                throw PartyApiException.expertBadResponse();
+            }
+            return identifier;
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
+    /**
+     * Lists one party's addresses. See {@link #findIdentifiers(UUID, UUID)} for the tenant and
+     * mapping rules.
+     */
+    public List<PartyAddressDto> findAddresses(UUID tenantId, UUID partyId) {
+        try {
+            List<PartyAddressDto> addresses = client.get()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/addresses")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId))
+                    .header(TENANT_HEADER, tenantId.toString())
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+            if (addresses == null) {
+                throw PartyApiException.expertBadResponse();
+            }
+            return addresses.stream().filter(Objects::nonNull).toList();
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
+    /**
+     * Adds an address to a party. The body is forwarded unchanged: the expert owns address
+     * validation, country normalization, and duplicate detection.
+     */
+    public PartyAddressDto createAddress(UUID tenantId, UUID partyId, JsonNode body) {
+        try {
+            PartyAddressDto address = client.post()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/addresses")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId))
+                    .header(TENANT_HEADER, tenantId.toString())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(PartyAddressDto.class);
+            if (address == null) {
+                throw PartyApiException.expertBadResponse();
+            }
+            return address;
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
     private PartyApiException translate(RestClientResponseException exception, UUID partyId) {
         HttpStatus status = HttpStatus.resolve(exception.getStatusCode().value());
         ApiError error = readError(exception);
@@ -80,6 +194,15 @@ public class PartyClient {
                     ? "Party not found" + (partyId == null ? "" : ": " + partyId)
                     : error.message();
             return PartyApiException.notFound(message);
+        }
+        if (status == HttpStatus.CONFLICT) {
+            String code = error == null || error.code() == null || error.code().isBlank()
+                    ? "CONFLICT"
+                    : error.code();
+            String message = error == null || error.message() == null || error.message().isBlank()
+                    ? "Party expert reported a conflict"
+                    : error.message();
+            return PartyApiException.conflict(code, message);
         }
         if (status != null && status.is5xxServerError()) {
             return PartyApiException.expertUnavailable();

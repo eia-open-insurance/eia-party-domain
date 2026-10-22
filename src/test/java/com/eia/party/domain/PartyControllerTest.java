@@ -103,6 +103,26 @@ class PartyControllerTest {
                 .andExpect(jsonPath("$.message").value("Party expert is unreachable"));
     }
 
+    @Test
+    void expertConflictMapsToStructured409() throws Exception {
+        when(client.create(eq(TENANT), any()))
+                .thenThrow(PartyApiException.conflict("DUPLICATE_PARTY", "Party already exists"));
+
+        mvc.perform(post(URL)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "partyType": "ORGANIZATION",
+                                  "displayName": "Acme Chemical Corporation",
+                                  "legalName": "Acme Chemical Corporation"
+                                }
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DUPLICATE_PARTY"))
+                .andExpect(jsonPath("$.message").value("Party already exists"));
+    }
+
     private static PartyDto party() {
         Instant now = Instant.parse("2026-10-19T12:00:00Z");
         return new PartyDto(
