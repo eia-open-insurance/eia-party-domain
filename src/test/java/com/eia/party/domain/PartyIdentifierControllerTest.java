@@ -17,11 +17,15 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -172,6 +176,168 @@ class PartyIdentifierControllerTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION"));
 
         verifyNoInteractions(client);
+    }
+
+    @Test
+    void updatesAnIdentifierAndReturnsTheExpertProjection() throws Exception {
+        when(client.updateIdentifier(eq(TENANT), eq(PARTY_ID), eq(IDENTIFIER_ID), any()))
+                .thenReturn(identifier());
+
+        mvc.perform(patch(URL + "/" + IDENTIFIER_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "identifierType": "TAX_ID",
+                                  "identifierValue": "123-45-6789",
+                                  "issuingAuthority": "IRS",
+                                  "effectiveDate": "2026-01-20"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(IDENTIFIER_ID.toString()))
+                .andExpect(jsonPath("$.identifierType").value("TAX_ID"))
+                .andExpect(jsonPath("$.issuingAuthority").value("IRS"));
+
+        ArgumentCaptor<ObjectNode> body = ArgumentCaptor.forClass(ObjectNode.class);
+        verify(client).updateIdentifier(eq(TENANT), eq(PARTY_ID), eq(IDENTIFIER_ID), body.capture());
+        assertThat(body.getValue().path("identifierValue").asText()).isEqualTo("123-45-6789");
+        assertThat(body.getValue().path("issuingAuthority").asText()).isEqualTo("IRS");
+        assertThat(body.getValue().path("effectiveDate").asText()).isEqualTo("2026-01-20");
+    }
+
+    @Test
+    void deletesAnIdentifierAndReturnsNoContent() throws Exception {
+        mvc.perform(delete(URL + "/" + IDENTIFIER_ID).header("X-EIA-Tenant", TENANT))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        verify(client).deleteIdentifier(TENANT, PARTY_ID, IDENTIFIER_ID);
+    }
+
+    @Test
+    void updateRequiresTheTenantHeader() throws Exception {
+        mvc.perform(patch(URL + "/" + IDENTIFIER_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"issuingAuthority\":\"IRS\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("TENANT_REQUIRED"))
+                .andExpect(jsonPath("$.message").value("X-EIA-Tenant header is required"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void deleteRequiresTheTenantHeader() throws Exception {
+        mvc.perform(delete(URL + "/" + IDENTIFIER_ID))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("TENANT_REQUIRED"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void updateRejectsAMalformedIdentifierId() throws Exception {
+        mvc.perform(patch(URL + "/not-a-uuid")
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"issuingAuthority\":\"IRS\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"))
+                .andExpect(jsonPath("$.message").value("Invalid value for identifierId"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void updateRejectsMalformedJsonBeforeCallingTheExpert() throws Exception {
+        mvc.perform(patch(URL + "/" + IDENTIFIER_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION"))
+                .andExpect(jsonPath("$.message").value("Malformed or unreadable request body"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void preservesExpertValidationProblemOnUpdate() throws Exception {
+        when(client.updateIdentifier(eq(TENANT), eq(PARTY_ID), eq(IDENTIFIER_ID), any()))
+                .thenThrow(PartyApiException.badRequest("VALIDATION_ERROR",
+                        "Unsupported identifierType: NATIONAL_ID"));
+
+        mvc.perform(patch(URL + "/" + IDENTIFIER_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"identifierType\":\"NATIONAL_ID\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").value("Unsupported identifierType: NATIONAL_ID"));
+    }
+
+    @Test
+    void preservesExpertNotFoundProblemOnUpdate() throws Exception {
+        when(client.updateIdentifier(eq(TENANT), eq(PARTY_ID), eq(IDENTIFIER_ID), any()))
+                .thenThrow(PartyApiException.notFound("Identifier not found: " + IDENTIFIER_ID));
+
+        mvc.perform(patch(URL + "/" + IDENTIFIER_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"issuingAuthority\":\"IRS\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.message").value("Identifier not found: " + IDENTIFIER_ID));
+    }
+
+    @Test
+    void preservesExpertConflictProblemOnUpdate() throws Exception {
+        when(client.updateIdentifier(eq(TENANT), eq(PARTY_ID), eq(IDENTIFIER_ID), any()))
+                .thenThrow(PartyApiException.conflict("CONFLICT",
+                        "Identifier already exists for this party: TAX_ID 123-45-6789"));
+
+        mvc.perform(patch(URL + "/" + IDENTIFIER_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"identifierValue\":\"123-45-6789\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONFLICT"))
+                .andExpect(jsonPath("$.message")
+                        .value("Identifier already exists for this party: TAX_ID 123-45-6789"));
+    }
+
+    @Test
+    void preservesExpertValidationProblemOnDelete() throws Exception {
+        doThrow(PartyApiException.badRequest("VALIDATION_ERROR", "Identifier is referenced"))
+                .when(client).deleteIdentifier(TENANT, PARTY_ID, IDENTIFIER_ID);
+
+        mvc.perform(delete(URL + "/" + IDENTIFIER_ID).header("X-EIA-Tenant", TENANT))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").value("Identifier is referenced"));
+    }
+
+    @Test
+    void preservesExpertNotFoundProblemOnDelete() throws Exception {
+        doThrow(PartyApiException.notFound("Identifier not found: " + IDENTIFIER_ID))
+                .when(client).deleteIdentifier(TENANT, PARTY_ID, IDENTIFIER_ID);
+
+        mvc.perform(delete(URL + "/" + IDENTIFIER_ID).header("X-EIA-Tenant", TENANT))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.message").value("Identifier not found: " + IDENTIFIER_ID));
+    }
+
+    @Test
+    void preservesExpertConflictProblemOnDelete() throws Exception {
+        doThrow(PartyApiException.conflict("CONFLICT", "Identifier is in use"))
+                .when(client).deleteIdentifier(TENANT, PARTY_ID, IDENTIFIER_ID);
+
+        mvc.perform(delete(URL + "/" + IDENTIFIER_ID).header("X-EIA-Tenant", TENANT))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONFLICT"))
+                .andExpect(jsonPath("$.message").value("Identifier is in use"));
     }
 
     private static PartyIdentifierDto identifier() {

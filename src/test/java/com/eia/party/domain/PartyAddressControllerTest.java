@@ -17,11 +17,15 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -137,6 +141,158 @@ class PartyAddressControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
                 .andExpect(jsonPath("$.message").value("Unsupported addressType: HOME"));
+    }
+
+    @Test
+    void updatesAnAddressAndReturnsTheExpertProjection() throws Exception {
+        when(client.updateAddress(eq(TENANT), eq(PARTY_ID), eq(ADDRESS_ID), any()))
+                .thenReturn(address());
+
+        mvc.perform(patch(URL + "/" + ADDRESS_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "addressType": "PRIMARY",
+                                  "line1": "1 Infinite Loop",
+                                  "line2": "Suite 100",
+                                  "city": "Cupertino",
+                                  "stateRegion": "CA",
+                                  "postalCode": "95014",
+                                  "country": "US",
+                                  "effectiveDate": "2026-02-01"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(ADDRESS_ID.toString()))
+                .andExpect(jsonPath("$.addressType").value("PRIMARY"))
+                .andExpect(jsonPath("$.country").value("US"));
+
+        ArgumentCaptor<ObjectNode> body = ArgumentCaptor.forClass(ObjectNode.class);
+        verify(client).updateAddress(eq(TENANT), eq(PARTY_ID), eq(ADDRESS_ID), body.capture());
+        assertThat(body.getValue().path("line2").asText()).isEqualTo("Suite 100");
+        assertThat(body.getValue().path("postalCode").asText()).isEqualTo("95014");
+        assertThat(body.getValue().path("country").asText()).isEqualTo("US");
+    }
+
+    @Test
+    void deletesAnAddressAndReturnsNoContent() throws Exception {
+        mvc.perform(delete(URL + "/" + ADDRESS_ID).header("X-EIA-Tenant", TENANT))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        verify(client).deleteAddress(TENANT, PARTY_ID, ADDRESS_ID);
+    }
+
+    @Test
+    void updateRequiresTheTenantHeader() throws Exception {
+        mvc.perform(patch(URL + "/" + ADDRESS_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"city\":\"Cupertino\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("TENANT_REQUIRED"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void deleteRequiresTheTenantHeader() throws Exception {
+        mvc.perform(delete(URL + "/" + ADDRESS_ID))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("TENANT_REQUIRED"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void updateRejectsAMalformedAddressId() throws Exception {
+        mvc.perform(patch(URL + "/not-a-uuid")
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"city\":\"Cupertino\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"))
+                .andExpect(jsonPath("$.message").value("Invalid value for addressId"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void preservesExpertValidationProblemOnUpdate() throws Exception {
+        when(client.updateAddress(eq(TENANT), eq(PARTY_ID), eq(ADDRESS_ID), any()))
+                .thenThrow(PartyApiException.badRequest("VALIDATION_ERROR",
+                        "Unsupported addressType: HOME"));
+
+        mvc.perform(patch(URL + "/" + ADDRESS_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"addressType\":\"HOME\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").value("Unsupported addressType: HOME"));
+    }
+
+    @Test
+    void preservesExpertNotFoundProblemOnUpdate() throws Exception {
+        when(client.updateAddress(eq(TENANT), eq(PARTY_ID), eq(ADDRESS_ID), any()))
+                .thenThrow(PartyApiException.notFound("Address not found: " + ADDRESS_ID));
+
+        mvc.perform(patch(URL + "/" + ADDRESS_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"city\":\"Cupertino\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.message").value("Address not found: " + ADDRESS_ID));
+    }
+
+    @Test
+    void preservesExpertConflictProblemOnUpdate() throws Exception {
+        when(client.updateAddress(eq(TENANT), eq(PARTY_ID), eq(ADDRESS_ID), any()))
+                .thenThrow(PartyApiException.conflict("CONFLICT",
+                        "Address already exists for this party: PRIMARY 1 Infinite Loop"));
+
+        mvc.perform(patch(URL + "/" + ADDRESS_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"line1\":\"1 Infinite Loop\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONFLICT"))
+                .andExpect(jsonPath("$.message")
+                        .value("Address already exists for this party: PRIMARY 1 Infinite Loop"));
+    }
+
+    @Test
+    void preservesExpertValidationProblemOnDelete() throws Exception {
+        doThrow(PartyApiException.badRequest("VALIDATION_ERROR", "Address is referenced"))
+                .when(client).deleteAddress(TENANT, PARTY_ID, ADDRESS_ID);
+
+        mvc.perform(delete(URL + "/" + ADDRESS_ID).header("X-EIA-Tenant", TENANT))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.message").value("Address is referenced"));
+    }
+
+    @Test
+    void preservesExpertNotFoundProblemOnDelete() throws Exception {
+        doThrow(PartyApiException.notFound("Address not found: " + ADDRESS_ID))
+                .when(client).deleteAddress(TENANT, PARTY_ID, ADDRESS_ID);
+
+        mvc.perform(delete(URL + "/" + ADDRESS_ID).header("X-EIA-Tenant", TENANT))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.message").value("Address not found: " + ADDRESS_ID));
+    }
+
+    @Test
+    void preservesExpertConflictProblemOnDelete() throws Exception {
+        doThrow(PartyApiException.conflict("CONFLICT", "Address is in use"))
+                .when(client).deleteAddress(TENANT, PARTY_ID, ADDRESS_ID);
+
+        mvc.perform(delete(URL + "/" + ADDRESS_ID).header("X-EIA-Tenant", TENANT))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CONFLICT"))
+                .andExpect(jsonPath("$.message").value("Address is in use"));
     }
 
     private static PartyAddressDto address() {

@@ -170,6 +170,59 @@ public class PartyClient {
     }
 
     /**
+     * Applies an update to one identifier. The body is forwarded unchanged: the expert owns
+     * identifier validation, normalization, and duplicate detection, and the tenant comes from
+     * the query parameter and the {@code X-EIA-Tenant} header. The expert projection of the
+     * updated record is returned.
+     */
+    public PartyIdentifierDto updateIdentifier(UUID tenantId, UUID partyId, UUID identifierId,
+                                               JsonNode body) {
+        try {
+            PartyIdentifierDto identifier = client.patch()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/identifiers/{identifierId}")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId, identifierId))
+                    .header(TENANT_HEADER, tenantId.toString())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(PartyIdentifierDto.class);
+            if (identifier == null) {
+                throw PartyApiException.expertBadResponse();
+            }
+            return identifier;
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
+    /**
+     * Deletes one identifier. The expert owns existence, the tenant wall, and any refusal rule;
+     * its {@code 400}/{@code 404}/{@code 409} problems are translated without changing the status.
+     */
+    public void deleteIdentifier(UUID tenantId, UUID partyId, UUID identifierId) {
+        try {
+            client.delete()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/identifiers/{identifierId}")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId, identifierId))
+                    .header(TENANT_HEADER, tenantId.toString())
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
+    /**
      * Lists one party's addresses. See {@link #findIdentifiers(UUID, UUID)} for the tenant and
      * mapping rules.
      */
@@ -214,6 +267,57 @@ public class PartyClient {
                 throw PartyApiException.expertBadResponse();
             }
             return address;
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
+    /**
+     * Applies an update to one address. The body is forwarded unchanged: the expert owns
+     * address validation, country normalization, and duplicate detection.
+     */
+    public PartyAddressDto updateAddress(UUID tenantId, UUID partyId, UUID addressId,
+                                         JsonNode body) {
+        try {
+            PartyAddressDto address = client.patch()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/addresses/{addressId}")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId, addressId))
+                    .header(TENANT_HEADER, tenantId.toString())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(PartyAddressDto.class);
+            if (address == null) {
+                throw PartyApiException.expertBadResponse();
+            }
+            return address;
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, partyId);
+        } catch (ResourceAccessException ex) {
+            throw PartyApiException.expertUnavailable();
+        } catch (RestClientException ex) {
+            throw PartyApiException.expertUnavailable();
+        }
+    }
+
+    /**
+     * Deletes one address. See {@link #deleteIdentifier(UUID, UUID, UUID)} for the tenant and
+     * error-preservation rules.
+     */
+    public void deleteAddress(UUID tenantId, UUID partyId, UUID addressId) {
+        try {
+            client.delete()
+                    .uri(uri -> uri.path("/internal/v1/parties/{partyId}/addresses/{addressId}")
+                            .queryParam("tenantId", tenantId)
+                            .build(partyId, addressId))
+                    .header(TENANT_HEADER, tenantId.toString())
+                    .retrieve()
+                    .toBodilessEntity();
         } catch (RestClientResponseException ex) {
             throw translate(ex, partyId);
         } catch (ResourceAccessException ex) {

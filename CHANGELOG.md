@@ -17,6 +17,11 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   the Party expert and returning typed `PartyIdentifierDto`/`PartyAddressDto`
   projections. Expert `400`, `404`, and `409` responses keep their status and
   structured error code.
+- `PATCH` and `DELETE /api/v1/parties/{partyId}/identifiers/{identifierId}` and
+  `/api/v1/parties/{partyId}/addresses/{addressId}`, proxying the tenant and the
+  update body to the Party expert and returning the updated projection (`200`)
+  or `204 No Content`. Expert `400`, `404`, and `409` responses keep their
+  status and structured error code.
 - `PATCH /api/v1/parties/{partyId}/status` with the `{status, reason}` command,
   forwarding the tenant plus the optional `If-Match` and `Idempotency-Key`
   headers to the Party expert and returning the updated party DTO with a

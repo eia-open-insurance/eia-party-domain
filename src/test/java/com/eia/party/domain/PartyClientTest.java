@@ -214,6 +214,118 @@ class PartyClientTest {
     }
 
     @Test
+    void updateIdentifierForwardsTenantAndBodyAndMapsTheUpdatedProjection() {
+        ObjectNode body = JsonNodeFactory.instance.objectNode();
+        body.put("identifierType", "TAX_ID");
+        body.put("identifierValue", "123-45-6789");
+        body.put("issuingAuthority", "IRS");
+        body.put("effectiveDate", "2026-01-20");
+
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/identifiers/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(content().json("""
+                        {
+                          "identifierType": "TAX_ID",
+                          "identifierValue": "123-45-6789",
+                          "issuingAuthority": "IRS",
+                          "effectiveDate": "2026-01-20"
+                        }
+                        """))
+                .andRespond(withSuccess("""
+                        {
+                          "id": "%s",
+                          "tenantId": "%s",
+                          "partyId": "%s",
+                          "identifierType": "TAX_ID",
+                          "identifierValue": "123-45-6789",
+                          "issuingAuthority": "IRS",
+                          "effectiveDate": "2026-01-20",
+                          "createdAt": "2026-10-22T09:00:00Z",
+                          "createdBy": "system"
+                        }
+                        """.formatted(CHILD_ID, TENANT, PARTY_ID), MediaType.APPLICATION_JSON));
+
+        PartyIdentifierDto identifier = client.updateIdentifier(TENANT, PARTY_ID, CHILD_ID, body);
+
+        assertEquals(CHILD_ID, identifier.id());
+        assertEquals("TAX_ID", identifier.identifierType());
+        assertEquals("IRS", identifier.issuingAuthority());
+        assertEquals(LocalDate.parse("2026-01-20"), identifier.effectiveDate());
+        server.verify();
+    }
+
+    @Test
+    void updateIdentifierWithAnEmptyExpertBodyIsABadGateway() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/identifiers/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andRespond(withSuccess());
+
+        PartyApiException exception = assertThrows(PartyApiException.class,
+                () -> client.updateIdentifier(TENANT, PARTY_ID, CHILD_ID,
+                        JsonNodeFactory.instance.objectNode().put("issuingAuthority", "IRS")));
+
+        assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatus());
+        assertEquals("EXPERT_BAD_RESPONSE", exception.getCode());
+        server.verify();
+    }
+
+    @Test
+    void updateIdentifierPreservesExpertBadRequest() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/identifiers/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {
+                                  "code": "VALIDATION_ERROR",
+                                  "message": "Unsupported identifierType: NATIONAL_ID"
+                                }
+                                """));
+
+        PartyApiException exception = assertThrows(PartyApiException.class,
+                () -> client.updateIdentifier(TENANT, PARTY_ID, CHILD_ID,
+                        JsonNodeFactory.instance.objectNode().put("identifierType", "NATIONAL_ID")));
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
+        assertEquals("VALIDATION_ERROR", exception.getCode());
+        assertEquals("Unsupported identifierType: NATIONAL_ID", exception.getMessage());
+        server.verify();
+    }
+
+    @Test
+    void deleteIdentifierForwardsTheTenant() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/identifiers/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andExpect(method(HttpMethod.DELETE))
+                .andExpect(header("X-EIA-Tenant", TENANT.toString()))
+                .andRespond(withStatus(HttpStatus.NO_CONTENT));
+
+        client.deleteIdentifier(TENANT, PARTY_ID, CHILD_ID);
+
+        server.verify();
+    }
+
+    @Test
+    void deleteIdentifierPreservesExpertNotFound() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/identifiers/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"NOT_FOUND\",\"message\":\"Identifier not found: "
+                                + CHILD_ID + "\"}"));
+
+        PartyApiException exception = assertThrows(PartyApiException.class,
+                () -> client.deleteIdentifier(TENANT, PARTY_ID, CHILD_ID));
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
+        assertEquals("NOT_FOUND", exception.getCode());
+        assertEquals("Identifier not found: " + CHILD_ID, exception.getMessage());
+        server.verify();
+    }
+
+    @Test
     void findAddressesForwardsTenantAndMapsTheExpertProjection() {
         server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
                         + "/addresses?tenantId=" + TENANT))
@@ -444,6 +556,113 @@ class PartyClientTest {
         assertEquals(HttpStatus.CONFLICT, exception.getStatus());
         assertEquals("CONFLICT", exception.getCode());
         assertEquals("Address already exists for this party", exception.getMessage());
+        server.verify();
+    }
+
+    @Test
+    void updateAddressForwardsTenantAndBodyAndMapsTheUpdatedProjection() {
+        ObjectNode body = JsonNodeFactory.instance.objectNode();
+        body.put("addressType", "PRIMARY");
+        body.put("line1", "1 Infinite Loop");
+        body.put("line2", "Suite 100");
+        body.put("city", "Cupertino");
+        body.put("stateRegion", "CA");
+        body.put("postalCode", "95015");
+        body.put("country", "US");
+        body.put("effectiveDate", "2026-02-01");
+
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/addresses/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(content().json("""
+                        {
+                          "addressType": "PRIMARY",
+                          "line1": "1 Infinite Loop",
+                          "line2": "Suite 100",
+                          "city": "Cupertino",
+                          "stateRegion": "CA",
+                          "postalCode": "95015",
+                          "country": "US",
+                          "effectiveDate": "2026-02-01"
+                        }
+                        """))
+                .andRespond(withSuccess("""
+                        {
+                          "id": "%s",
+                          "tenantId": "%s",
+                          "partyId": "%s",
+                          "addressType": "PRIMARY",
+                          "line1": "1 Infinite Loop",
+                          "line2": "Suite 100",
+                          "city": "Cupertino",
+                          "stateRegion": "CA",
+                          "postalCode": "95015",
+                          "country": "US",
+                          "createdAt": "2026-10-22T09:00:00Z",
+                          "createdBy": "system"
+                        }
+                        """.formatted(CHILD_ID, TENANT, PARTY_ID), MediaType.APPLICATION_JSON));
+
+        PartyAddressDto address = client.updateAddress(TENANT, PARTY_ID, CHILD_ID, body);
+
+        assertEquals(CHILD_ID, address.id());
+        assertEquals("Suite 100", address.line2());
+        assertEquals("95015", address.postalCode());
+        assertEquals("US", address.country());
+        server.verify();
+    }
+
+    @Test
+    void updateAddressPreservesExpertConflict() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/addresses/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andRespond(withStatus(HttpStatus.CONFLICT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("""
+                                {
+                                  "code": "CONFLICT",
+                                  "message": "Address already exists for this party"
+                                }
+                                """));
+
+        PartyApiException exception = assertThrows(PartyApiException.class,
+                () -> client.updateAddress(TENANT, PARTY_ID, CHILD_ID,
+                        JsonNodeFactory.instance.objectNode().put("line1", "1 Infinite Loop")));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        assertEquals("CONFLICT", exception.getCode());
+        assertEquals("Address already exists for this party", exception.getMessage());
+        server.verify();
+    }
+
+    @Test
+    void deleteAddressForwardsTheTenant() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/addresses/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andExpect(method(HttpMethod.DELETE))
+                .andExpect(header("X-EIA-Tenant", TENANT.toString()))
+                .andRespond(withStatus(HttpStatus.NO_CONTENT));
+
+        client.deleteAddress(TENANT, PARTY_ID, CHILD_ID);
+
+        server.verify();
+    }
+
+    @Test
+    void deleteAddressPreservesExpertConflict() {
+        server.expect(requestTo(EXPERT + "/internal/v1/parties/" + PARTY_ID
+                        + "/addresses/" + CHILD_ID + "?tenantId=" + TENANT))
+                .andRespond(withStatus(HttpStatus.CONFLICT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"CONFLICT\",\"message\":\"Address is in use\"}"));
+
+        PartyApiException exception = assertThrows(PartyApiException.class,
+                () -> client.deleteAddress(TENANT, PARTY_ID, CHILD_ID));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        assertEquals("CONFLICT", exception.getCode());
+        assertEquals("Address is in use", exception.getMessage());
         server.verify();
     }
 

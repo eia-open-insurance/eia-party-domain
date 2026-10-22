@@ -25,12 +25,16 @@ Party expert unchanged.
 
 ## Identifiers and addresses
 
-`GET` and `POST /api/v1/parties/{partyId}/identifiers` and
+`GET`, `POST`, `PATCH`, and `DELETE /api/v1/parties/{partyId}/identifiers` and
 `/api/v1/parties/{partyId}/addresses` expose the party's identifier and address
-records. Both routes require `X-EIA-Tenant`; the domain forwards that tenant on
-the query string and the header to the Party expert's internal route and
-forwards the POST body unchanged. The expert owns type validation, country
-normalization, duplicate detection, and the tenant wall.
+records; `PATCH` and `DELETE` address one record through
+`/{identifierId}` and `/{addressId}`. Every route requires `X-EIA-Tenant`; the
+domain forwards that tenant on the query string and the header to the Party
+expert's internal route and forwards the write body unchanged. `PATCH` sends
+the replacement values for the record's mutable fields and returns the expert
+projection of the updated record. `DELETE` returns `204 No Content`. The expert
+owns type validation, country normalization, duplicate detection, and the
+tenant wall.
 
 - Identifier projection: `id`, `tenantId`, `partyId`, `identifierType`,
   `identifierValue`, `issuingAuthority`, `effectiveDate`, `createdAt`,
@@ -49,6 +53,24 @@ Content-Type: application/json
 
 {"identifierType":"TAX_ID","identifierValue":"123-45-6789","issuingAuthority":"IRS"}
 ```
+
+```http
+PATCH /api/v1/parties/0192f3a4-8f1c-7c3a-9b2e-6a1d4f8e2b90/identifiers/0192f3a4-9000-7c3a-9b2e-6a1d4f8e2b90
+X-EIA-Tenant: 11111111-1111-7111-8111-111111111111
+Content-Type: application/json
+
+{
+  "identifierType": "TAX_ID",
+  "identifierValue": "123-45-6789",
+  "issuingAuthority": "Internal Revenue Service",
+  "effectiveDate": "2026-01-20"
+}
+```
+
+`PATCH` returns `200 OK` with the updated identifier or address projection.
+`DELETE` returns `204 No Content`. A missing record is `404`, a duplicate
+identifier is `409`, and a rejected body is `400`, each with the expert's
+structured `code` and `message`.
 
 ## Status transitions
 
